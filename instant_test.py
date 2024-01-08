@@ -5,8 +5,15 @@ import time
 import threading
 import subprocess
 import pandas as pd
+import platform
+import ctypes
 
+import requests
 
+smsapi = "http://api.smsbao.com/"
+user = "blitzfeng"
+password = "61dedea83a334d0da3e299374aabf748"
+phone = "18606531259"
 ####################获取数据####################
 def fetch_and_store_minute_data(symbol, period):
     # 获取分时数据
@@ -75,28 +82,30 @@ def fetch_and_store_minute_data(symbol, period):
 
 def fetch_periodically(symbol):
         while True:
-            for period in [1, 5, 15, 30, 60] :
+            for period in [1, 5, 15] :
                 fetch_and_store_minute_data(symbol, period)
-                print(f"已抓取{symbol}的{period}分钟数据")
+                #打印当前时间
+                current_time = datetime.now()
+                print(f"{current_time}已抓取{symbol}的{period}分钟数据")
             handleData(symbol)
-            time.sleep(900)  # Sleep for 15 minutes (900 seconds)
+            time.sleep(60)  # Sleep for 1 minutes (900 seconds)
 
 ######################消费数据######################
             
 open_price = 0 #开仓价格
 stop_loss = 0 #止损价格
 #加载数据
-def load_data(db_name, table_name,symbols):
-   # 建立数据库连接
+def load_data(db_name, table_name, symbols):
+    # 建立数据库连接
     conn = sqlite3.connect(db_name)
 
-    # 读取数据,选取数据库中symbol = symbols 的数据并以timestamp排序,最新的数据在前
-    query = f"SELECT * FROM {table_name} where symbol='{symbols}'  ORDER BY timestamp DESC LIMIT 20"
+    # 读取数据,选取数据库中symbol = symbols且datetime到"2024-01-05 13:45:00"的数据并以timestamp排序,最新的数据在前  AND datetime <= '2024-01-05 13:45:00'
+    query = f"SELECT * FROM {table_name} WHERE symbol='{symbols}'  ORDER BY timestamp DESC"
     df = pd.read_sql_query(query, conn)
 
     # 关闭数据库连接
     conn.close()
-
+    df = df.iloc[::-1]
     return df
 
 def add_ema(df):
@@ -116,7 +125,9 @@ def define_signals(df,symbol):
     df['value'] = 0 #平仓和开仓的价差
     # 识别趋势
     df['trend'] = 0
-    threshold = df['ma_diff'].rolling(window=30).mean()
+    threshold = df['ma_diff'].rolling(window=12).mean()
+    # thresholdTemp = df['ma_diff'][::-1].rolling(window=30).mean()
+    # threshold = thresholdTemp.iloc[::-1]
     df.loc[df['EMA5'] > df['EMA10'], 'trend'] = 1
     df.loc[df['EMA5'] < df['EMA10'], 'trend'] = -1
     df.loc[df['ma_diff'] < threshold -2 , 'trend'] = 2
@@ -124,8 +135,11 @@ def define_signals(df,symbol):
     global open_price
     global stop_loss
 
-    latestPosition = 1
+    latestPosition = 0
     i = latestPosition    
+    df = df.iloc[::-1]
+    print(f"symbol:{symbol},趋势:{df['trend'][i]}")
+    send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
     # 检查是否符合开仓条件
     if df['Position'][i+1] == 0 :  # 如果之前没有持仓
         if df['trend'][i+1] == 2 and (df['trend'][i] == 1 ):
@@ -191,15 +205,30 @@ def define_signals(df,symbol):
 
 #系统通知
 def send_notification(title, message):
-    #交互式通知
-    # script = f'''
-    # tell application "System Events"
-    #     display dialog "{message}" with title "{title}" buttons ["OK"] default button "OK"
-    # end tell
-    # '''
+    os_name = platform.system()
+
+    if os_name == 'Darwin':  # macOS
+         #交互式通知
+        script = f'''
+        tell application "System Events"
+            display dialog "{message}" with title "{title}" buttons ["OK"] default button "OK"
+        end tell
+        '''
+        subprocess.run(["osascript", "-e", script])
+    elif os_name == 'Windows':  # Windows
+        MessageBox = ctypes.windll.user32.MessageBoxW
+        MessageBox(None, message, title, 0)
+   
+    smsToPhone(message)
+    # script = f'display notification "{message}" with title "{title}"'
     # subprocess.run(["osascript", "-e", script])
-    script = f'display notification "{message}" with title "{title}"'
-    subprocess.run(["osascript", "-e", script])
+def smsToPhone(message):
+     url = smsapi + "sms?u=" + user + "&p=" + password + "&m=" + phone + "&c=" + message
+     print(url)
+     res = requests.get(url)
+     print(res.status_code)
+     print(res.text)
+
 
 def handleData(symbol):
     # 步骤1: 加载数据
@@ -212,8 +241,8 @@ def handleData(symbol):
 
     # 步骤3: 定义交易信号
     df = define_signals(df,symbol)
-    print(df)
-    df.to_excel('test.xlsx')
+    # print(df)
+    df.to_excel(f"{symbol}_test.xlsx")
 
 def start(symbol):
     # 创建数据库表
@@ -228,3 +257,4 @@ if __name__ == "__main__":
     product = ['SA2409','FG2405']
     for i in product:
         start(i)
+    #  smsToPhone("测试短信")

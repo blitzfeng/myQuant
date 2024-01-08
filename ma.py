@@ -55,7 +55,7 @@ stop_loss = 0
 
 # 步骤3: 定义交易信号
 def define_signals(df):
-    num_contracts = 2  # 每次交易的手数（合约数量）
+    num_contracts = 4  # 每次交易的手数（合约数量）
     commission_rate = 0.001  # 手续费率，例如0.1%
     df['Position'] = 0  # 交易仓位状态：1表示多头，-1表示空头，0表示无仓位
     df['Stop_Loss'] = 0  # 止损价格
@@ -66,7 +66,7 @@ def define_signals(df):
     # df['trend_profit'] = 0
     # 识别趋势
     df['trend'] = 0
-    threshold = df['ma_diff'].rolling(window=20).mean()
+    threshold = df['ma_diff'].rolling(window=12).mean()
     df.loc[df['EMA5'] > df['EMA10'], 'trend'] = 1
     df.loc[df['EMA5'] < df['EMA10'], 'trend'] = -1
     df.loc[df['ma_diff'] < threshold - 2 , 'trend'] = 2
