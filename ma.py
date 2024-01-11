@@ -79,7 +79,7 @@ def define_signals(df):
         
         # 检查是否符合开仓条件
         if df['Position'][i-1] == 0 :  # 如果之前没有持仓
-            if df['trend'][i-1] == 2 and (df['trend'][i] == 1 ):
+            if df['trend'][i-1] == 2 and df['trend'][i] == 1 :
                     df.loc[i,'Position'] = 1  # 做多
                     df.loc[i,'Open_Price'] = df['close'][i]
                     open_price = df['Open_Price'][i]

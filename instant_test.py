@@ -9,44 +9,86 @@ import platform
 import ctypes
 
 import requests
+import os
 
 smsapi = "http://api.smsbao.com/"
 user = "blitzfeng"
 password = "61dedea83a334d0da3e299374aabf748"
 phone = "18606531259"
+
+isFirst = True
 ####################获取数据####################
 def fetch_and_store_minute_data(symbol, period):
-    # 获取分时数据
-    minute_data = ak.futures_zh_minute_sina(symbol=symbol, period=period)
+    try:
+        # 获取分时数据
+        minute_data = ak.futures_zh_minute_sina(symbol=symbol, period=period)
 
-    if not minute_data.empty:
-        # 过滤掉表头
-        minute_data = minute_data.iloc[1:]
+        if not minute_data.empty:
+            # 过滤掉表头
+            minute_data = minute_data.iloc[1:]
 
-        table_name = f'_{period}_minute_data'
-        columns = ['datetime', 'symbol','open', 'high', 'low', 'close', 'volume', 'hold']
+            table_name = f'_{period}_minute_data'
+            columns = ['datetime', 'symbol','open', 'high', 'low', 'close', 'volume', 'hold']
 
-        # 连接数据库
+            # 连接数据库
+            conn = sqlite3.connect('futures_data.db')
+            cursor = conn.cursor()
+
+
+            # 插入数据到数据库表
+            for _, row in minute_data.iterrows():
+                # print(row)
+                # datetime_str = row['日期'] + ' ' + row['时间']
+                timestamp = int(datetime.strptime(row['datetime'], '%Y-%m-%d %H:%M:%S').timestamp())
+                flag = symbol + str(timestamp)
+                values = [timestamp,flag,row['datetime'],symbol, row['open'], row['high'], row['low'], row['close'], row['volume'], row['hold']]
+                insert_sql = f'''
+                    INSERT OR IGNORE INTO {table_name} (timestamp,flag, {', '.join(columns)})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?,?,?)
+                '''
+                cursor.execute(insert_sql, values)
+
+            # 提交并关闭连接
+            conn.commit()
+            conn.close()
+    except Exception as e:
+        print(f"fetch_and_store_minute_data error")
+def data_correct(symbol, period):
+    try:
+        # Connect to the database
         conn = sqlite3.connect('futures_data.db')
         cursor = conn.cursor()
+        # Define the table name
+        table_name = f'_{period}_minute_data'
+        # Define the columns
+        columns = ['timestamp', 'flag', 'datetime', 'symbol', 'open', 'high', 'low', 'close', 'volume']
 
+        # Fetch the data
+        data = ak.futures_zh_minute_sina(symbol=symbol, period=period).iloc[1:]
 
-        # 插入数据到数据库表
-        for _, row in minute_data.iterrows():
-            # print(row)
-            # datetime_str = row['日期'] + ' ' + row['时间']
+        # Check if data already exists in the table and update or insert accordingly
+        for _, row in data.tail(20).iterrows():
             timestamp = int(datetime.strptime(row['datetime'], '%Y-%m-%d %H:%M:%S').timestamp())
+            select_query = f"SELECT * FROM {table_name} WHERE symbol = ? AND timestamp = ?;"
+            cursor.execute(select_query, (symbol,timestamp))
+            # print(f"timestamp:{timestamp} row:{row}")
             flag = symbol + str(timestamp)
-            values = [timestamp,flag,row['datetime'],symbol, row['open'], row['high'], row['low'], row['close'], row['volume'], row['hold']]
-            insert_sql = f'''
-                INSERT OR IGNORE INTO {table_name} (timestamp,flag, {', '.join(columns)})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?,?,?)
-            '''
-            cursor.execute(insert_sql, values)
+            existing_data = cursor.fetchone()
+            # print(f"existing_data:{existing_data}")
+            if existing_data:
+                update_query = f"UPDATE {table_name} SET flag = ?, datetime = ?, open = ?, high = ?, low = ?, close = ?, volume = ? WHERE symbol = ? AND timestamp = ?;"
+                cursor.execute(update_query, (flag, row['datetime'], row['open'], row['high'], row['low'], row['close'], row['volume'], symbol, timestamp))
+                # print(f"update:{flag} volume:{row['volume']}")
+            else:
+                insert_query = f"INSERT INTO {table_name} (timestamp,flag, datetime, symbol, open, high, low, close, volume,hold) VALUES (?, ?, ?, ?, ?, ?, ?, ?,?,?);"
+                cursor.execute(insert_query, (timestamp,flag, row['datetime'], symbol, row['open'], row['high'], row['low'], row['close'], row['volume'],row['hold']))
 
-        # 提交并关闭连接
+        # Commit the changes and close the connection
         conn.commit()
         conn.close()
+    except Exception as e:
+        print("fetch_and_store_minute_data")
+
 # def fetch_and_store_daily_data(symbol):
 #     # 获取日线数据
 #     daily_data = ak.futures_zh_daily_sina(symbol=symbol)
@@ -77,17 +119,21 @@ def fetch_and_store_minute_data(symbol, period):
 #         conn.commit()
 #         conn.close()
 
+def fetch_data(symbols):
+    # for symbol in symbols:
+    fetch_periodically(symbols)
 
 
-
-def fetch_periodically(symbol):
+def fetch_periodically(symbols):
+        period = 15
         while True:
-            for period in [1, 5, 15] :
+            for symbol in symbols :
                 fetch_and_store_minute_data(symbol, period)
+                data_correct(symbol, period)
                 #打印当前时间
                 current_time = datetime.now()
                 print(f"{current_time}已抓取{symbol}的{period}分钟数据")
-            handleData(symbol)
+            
             time.sleep(60)  # Sleep for 1 minutes (900 seconds)
 
 ######################消费数据######################
@@ -96,6 +142,8 @@ open_price = 0 #开仓价格
 stop_loss = 0 #止损价格
 #加载数据
 def load_data(db_name, table_name, symbols):
+
+    
     # 建立数据库连接
     conn = sqlite3.connect(db_name)
 
@@ -107,6 +155,16 @@ def load_data(db_name, table_name, symbols):
     conn.close()
     df = df.iloc[::-1]
     return df
+def load_data_from_excel(file_path, symbols):
+        if os.path.exists(file_path):
+            df = pd.read_excel(file_path)
+            df = df[df['symbol'] == symbols]
+            df = df.sort_values('timestamp')
+            return df
+        else:
+            return load_data('futures_data.db', 'daily_data', symbols)
+
+       
 
 def add_ema(df):
     df['EMA5'] = df['close'].ewm(span=5, adjust=False).mean()
@@ -139,10 +197,11 @@ def define_signals(df,symbol):
     i = latestPosition    
     df = df.iloc[::-1]
     print(f"symbol:{symbol},趋势:{df['trend'][i]}")
-    send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
+    # send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
     # 检查是否符合开仓条件
     if df['Position'][i+1] == 0 :  # 如果之前没有持仓
         if df['trend'][i+1] == 2 and (df['trend'][i] == 1 ):
+                print("做多开仓")
                 df.loc[i,'Position'] = 1  # 做多
                 df.loc[i,'Open_Price'] = df['close'][i]
                 open_price = df['Open_Price'][i]
@@ -151,6 +210,7 @@ def define_signals(df,symbol):
                 send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
 
         elif  df['trend'][i+1] == 2 and( df['trend'][i] == -1):
+                print("做空开仓")
                 df.loc[i,'Position'] = -1
                 df.loc[i,'Open_Price'] = df['close'][i]
                 open_price = df['Open_Price'][i]
@@ -165,10 +225,10 @@ def define_signals(df,symbol):
             df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
             df.loc[i,'Profit_Loss'] = num_contracts * (stop_loss - open_price) - df['Commission'][i]
             df.loc[i,'value'] = -lossValue
-            stop_loss = 0
             send_notification("交易提醒", f"触发{symbol}止损平仓条件,价格：{stop_loss}")
+            stop_loss = 0
 
-        # 止盈条件
+    # 止盈条件
         elif df['trend'][i] == 2 and df['trend'][i+1] == 1:
                 df.loc[i,'Position'] = 0
                 df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
@@ -176,31 +236,31 @@ def define_signals(df,symbol):
                 df.loc[i,'value'] = df['close'][i] - open_price
                 send_notification("交易提醒", f"触发{symbol}止盈平仓条件,价格：{df['close'][i]}")
                 open_price = 0
-        
+    
         else:
-           df.loc[i,'Position'] = 1  # 继续持有
+            df.loc[i,'Position'] = 1  # 继续持有
     elif df['Position'][i+1] == -1:
         # 止损条件
         if df['high'][i] >= stop_loss:
             df.loc[i,'Position'] = 0
             df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
             df.loc[i,'Profit_Loss'] = num_contracts * ( open_price - stop_loss) - df['Commission'][i]
-            stop_loss = 0
             df.loc[i,'value'] = -lossValue
             send_notification("交易提醒", f"触发{symbol}止损平仓条件,价格：{stop_loss}")
+            stop_loss = 0
 
-        # 止盈条件
-        # 检查趋势突破平仓条件
-        elif  df['trend'][i] == 2 and df['trend'][i+1] == -1:
-            df.loc[i,'Position'] = 0
-            df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
-            df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i]) - df['Commission'][i]
-            df.loc[i,'value'] = open_price - df['close'][i]
-            open_price = 0
-            send_notification("交易提醒", f"触发{symbol}止盈平仓条件,价格：{df['close'][i]}")
-        
-        else:
-            df.loc[i,'Position'] = -1# 继续持有
+    # 止盈条件
+    # 检查趋势突破平仓条件
+    elif  df['trend'][i] == 2 and df['trend'][i+1] == -1:
+        df.loc[i,'Position'] = 0
+        df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
+        df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i]) - df['Commission'][i]
+        df.loc[i,'value'] = open_price - df['close'][i]
+        open_price = 0
+        send_notification("交易提醒", f"触发{symbol}止盈平仓条件,价格：{df['close'][i]}")
+    
+    else:
+        df.loc[i,'Position'] = -1# 继续持有
     return df
 
 #系统通知
@@ -219,22 +279,36 @@ def send_notification(title, message):
         MessageBox = ctypes.windll.user32.MessageBoxW
         MessageBox(None, message, title, 0)
    
-    smsToPhone(message)
+    # smsToPhone(message)
     # script = f'display notification "{message}" with title "{title}"'
     # subprocess.run(["osascript", "-e", script])
 def smsToPhone(message):
-     url = smsapi + "sms?u=" + user + "&p=" + password + "&m=" + phone + "&c=" + message
-     print(url)
-     res = requests.get(url)
-     print(res.status_code)
-     print(res.text)
-
+    token = 'd6bea3335df8461d9a64d78a2162878d'#前边复制到那个token
+    title = message
+    content = message
+    template = 'txt'
+    channel = 'sms'
+    url = f"https://www.pushplus.plus/send?token={token}&title={title}&content={content}&template={template}&channel={channel}"
+    print(url)
+    r = requests.get(url=url)
+    print(r.text)
+def startHandleData(symbols):
+    while True:
+        for symbol in symbols:
+            handleData(symbol)
+        time.sleep(900)
 
 def handleData(symbol):
+    global isFirst
     # 步骤1: 加载数据
     db_name = 'futures_data.db'
     table_name = '_15_minute_data'
-    df = load_data(db_name, table_name,symbol)
+    #判断是否是首次调用
+    if isFirst:
+        df = load_data_from_excel(f"{symbol}_test.xlsx",symbol)
+        isFirst = False
+    else:
+        df = load_data(db_name, table_name,symbol)
 
     # 步骤2: 计算指标
     df = add_ema(df)
@@ -254,7 +328,13 @@ def start(symbol):
     thread.start()   
 
 if __name__ == "__main__":
+    
     product = ['SA2409','FG2405']
-    for i in product:
-        start(i)
+    dataThread = threading.Thread(target=fetch_data, args=(product,))
+    dataThread.start()
+
+    handleDataThread = threading.Thread(target=startHandleData, args=(product,))
+    handleDataThread.start()
+    # for i in product:
+    #     start(i)
     #  smsToPhone("测试短信")
