@@ -89,35 +89,6 @@ def data_correct(symbol, period):
     except Exception as e:
         print("fetch_and_store_minute_data")
 
-# def fetch_and_store_daily_data(symbol):
-#     # 获取日线数据
-#     daily_data = ak.futures_zh_daily_sina(symbol=symbol)
-
-#     if not daily_data.empty:
-#         # 过滤掉表头
-#         daily_data = daily_data.iloc[1:]
-#         table_name = 'daily_data'
-#         columns = ['datetime','symbol', 'open', 'high', 'low', 'close', 'volume', 'hold']
-
-#         # 连接数据库
-#         conn = sqlite3.connect('futures_data.db')
-#         cursor = conn.cursor()
-
-        
-#         # 插入数据到数据库表
-#         for _, row in daily_data.iterrows():
-#             timestamp = int(datetime.strptime(row['date'], '%Y-%m-%d').timestamp())
-#             flag = symbol + str(timestamp)
-#             values = [timestamp, flag,row['date'],symbol, row['open'], row['high'], row['low'], row['close'], row['volume'], row['hold']]
-#             insert_sql = f'''
-#                 INSERT OR IGNORE INTO {table_name} (timestamp,flag,{', '.join(columns)})
-#                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-#             '''
-#             cursor.execute(insert_sql, values)
-#         print(f"Daily data for {symbol} fetched and stored at {datetime.now()},data length:{len(daily_data)}")
-#         # 提交并关闭连接
-#         conn.commit()
-#         conn.close()
 
 def fetch_data(symbols):
     # for symbol in symbols:
@@ -148,7 +119,7 @@ def load_data(db_name, table_name, symbols):
     conn = sqlite3.connect(db_name)
 
     # 读取数据,选取数据库中symbol = symbols且datetime到"2024-01-05 13:45:00"的数据并以timestamp排序,最新的数据在前  AND datetime <= '2024-01-05 13:45:00'
-    query = f"SELECT * FROM {table_name} WHERE symbol='{symbols}'  ORDER BY timestamp DESC"
+    query = f"SELECT * FROM {table_name} WHERE symbol='{symbols}'  ORDER BY timestamp DESC LIMIT 100"
     df = pd.read_sql_query(query, conn)
 
     # 关闭数据库连接
@@ -174,12 +145,12 @@ def add_ema(df):
 
 # 步骤3: 定义交易信号
 def define_signals(df,symbol):
-    num_contracts = 2  # 每次交易的手数（合约数量）
+    num_contracts = 4  # 每次交易的手数（合约数量）
     commission_rate = 0.002  # 手续费率，例如0.1%
     df['Position'] = 0  # 交易仓位状态：1表示多头，-1表示空头，0表示无仓位
     df['Stop_Loss'] = 0  # 止损价格
     df['Open_Price'] = 0  # 开仓价格
-    df['Profit_Loss'] = 0  # 平仓时的利润或亏损
+    df['Profit_Loss'] = 0.0  # 平仓时的利润或亏损
     df['value'] = 0 #平仓和开仓的价差
     # 识别趋势
     df['trend'] = 0
@@ -189,79 +160,98 @@ def define_signals(df,symbol):
     df.loc[df['EMA5'] > df['EMA10'], 'trend'] = 1
     df.loc[df['EMA5'] < df['EMA10'], 'trend'] = -1
     df.loc[df['ma_diff'] < threshold -2 , 'trend'] = 2
-    lossValue = 30
+    lossValue = 35
     global open_price
     global stop_loss
 
-    latestPosition = 0
-    i = latestPosition    
-    df = df.iloc[::-1]
-    print(f"symbol:{symbol},趋势:{df['trend'][i]}")
-    # send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
-    # 检查是否符合开仓条件
-    if df['Position'][i+1] == 0 :  # 如果之前没有持仓
-        if df['trend'][i+1] == 2 and (df['trend'][i] == 1 ):
-                print("做多开仓")
-                df.loc[i,'Position'] = 1  # 做多
-                df.loc[i,'Open_Price'] = df['close'][i]
-                open_price = df['Open_Price'][i]
-                df.loc[i,'Stop_Loss'] = df['close'][i] - lossValue
-                stop_loss = df['Stop_Loss'][i]
-                send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
+    # latestPosition = 0
+    # i = latestPosition    
+    
+    for i in range(len(df)-2,-1,-1):
+        if i == 0:
+            print(f"time:{datetime.now()} symbol:{symbol},趋势:{df['trend'][i]}")
+            sendToWechat(f"time:{datetime.now()} symbol:{symbol},趋势:{df['trend'][i]}")
+        # print(f"{df.loc[i,'datetime']},i:{i}")
+        # 检查是否符合开仓条件
+        if df['Position'][i+1] == 0 :  # 如果之前没有持仓
+            
+            if (df['trend'][i+1] == 2 or df['trend'][i+1] == -1)and (df['trend'][i] == 1 ):
+                    # print(f"做多{df.loc[i,'datetime']},i:{i}")
+                    df.loc[i,'Position'] = 1  # 做多
+                    df.loc[i,'Open_Price'] = df['close'][i]
+                    open_price = df['Open_Price'][i]
+                    df.loc[i,'Stop_Loss'] = df['close'][i] - lossValue
+                    stop_loss = df['Stop_Loss'][i]
+                    if i == 0:
+                        print("做多开仓")
+                        send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
 
-        elif  df['trend'][i+1] == 2 and( df['trend'][i] == -1):
-                print("做空开仓")
-                df.loc[i,'Position'] = -1
-                df.loc[i,'Open_Price'] = df['close'][i]
-                open_price = df['Open_Price'][i]
-                df.loc[i,'Stop_Loss'] = df['close'][i] + lossValue
-                stop_loss = df['Stop_Loss'][i]
-                send_notification("交易提醒", f"触发{symbol}做空开仓条件,价格：{df['close'][i]}")
-    # 持有多头仓位时的止损和止盈逻辑
-    if df['Position'][i+1] == 1:
-        # 止损条件
-        if df['low'][i] <= stop_loss:
-            df.loc[i,'Position'] = 0
-            df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
-            df.loc[i,'Profit_Loss'] = num_contracts * (stop_loss - open_price) - df['Commission'][i]
-            df.loc[i,'value'] = -lossValue
-            send_notification("交易提醒", f"触发{symbol}止损平仓条件,价格：{stop_loss}")
-            stop_loss = 0
-
-    # 止盈条件
-        elif df['trend'][i] == 2 and df['trend'][i+1] == 1:
+            elif (df['trend'][i+1] == 2 or df['trend'][i+1] == 1)and( df['trend'][i] == -1):
+                    
+                    df.loc[i,'Position'] = -1
+                    df.loc[i,'Open_Price'] = df['close'][i]
+                    open_price = df['Open_Price'][i]
+                    df.loc[i,'Stop_Loss'] = df['close'][i] + lossValue
+                    stop_loss = df['Stop_Loss'][i]
+                    if i == 0:
+                        print("做空开仓")
+                        send_notification("交易提醒", f"触发{symbol}做空开仓条件,价格：{df['close'][i]}")
+        # 持有多头仓位时的止损和止盈逻辑
+        if df['Position'][i+1] == 1:
+            # 止损条件
+            if df['low'][i] <= stop_loss:
                 df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
-                df.loc[i,'Profit_Loss'] = num_contracts * (df['close'][i] - open_price ) - df['Commission'][i]
-                df.loc[i,'value'] = df['close'][i] - open_price
-                send_notification("交易提醒", f"触发{symbol}止盈平仓条件,价格：{df['close'][i]}")
-                open_price = 0
-    
-        else:
-            df.loc[i,'Position'] = 1  # 继续持有
-    elif df['Position'][i+1] == -1:
-        # 止损条件
-        if df['high'][i] >= stop_loss:
-            df.loc[i,'Position'] = 0
-            df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
-            df.loc[i,'Profit_Loss'] = num_contracts * ( open_price - stop_loss) - df['Commission'][i]
-            df.loc[i,'value'] = -lossValue
-            send_notification("交易提醒", f"触发{symbol}止损平仓条件,价格：{stop_loss}")
-            stop_loss = 0
+                df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
+                df.loc[i,'Profit_Loss'] = num_contracts * (stop_loss - open_price)*20 - df['Commission'][i]
+                df.loc[i,'value'] = -lossValue
+                if i == 0:
+                    send_notification("交易提醒", f"触发多头{symbol}止损平仓条件,价格：{stop_loss}")
+                stop_loss = 0
 
-    # 止盈条件
-    # 检查趋势突破平仓条件
-    elif  df['trend'][i] == 2 and df['trend'][i+1] == -1:
-        df.loc[i,'Position'] = 0
-        df.loc[i,'Commission'] = df['close'][i] * num_contracts * commission_rate
-        df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i]) - df['Commission'][i]
-        df.loc[i,'value'] = open_price - df['close'][i]
-        open_price = 0
-        send_notification("交易提醒", f"触发{symbol}止盈平仓条件,价格：{df['close'][i]}")
-    
-    else:
-        df.loc[i,'Position'] = -1# 继续持有
+        # 止盈条件
+            elif df['trend'][i] == 2 and df['trend'][i+1] == 1:
+                    df.loc[i,'Position'] = 0
+                    df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
+                    df.loc[i,'Profit_Loss'] = num_contracts * (df['close'][i] - open_price )*20 - df['Commission'][i]
+                    df.loc[i,'value'] = df['close'][i] - open_price
+                    if i == 0:
+                        send_notification("交易提醒", f"触发多头{symbol}止盈平仓条件,价格：{df['close'][i]}")
+                    open_price = 0
+        
+            else:
+                df.loc[i,'Position'] = 1  # 继续持有
+        elif df['Position'][i+1] == -1:
+            # 止损条件
+            if df['high'][i] >= stop_loss:
+                df.loc[i,'Position'] = 0
+                df.loc[i,'Commission'] = 6000 *  num_contracts * commission_rate
+                df.loc[i,'Profit_Loss'] = num_contracts * ( open_price - stop_loss)*20 - df['Commission'][i]
+                df.loc[i,'value'] = -lossValue
+                if i == 0:
+                    send_notification("交易提醒", f"触发空头{symbol}止损平仓条件,价格：{stop_loss}")
+                stop_loss = 0
+            # 止盈条件
+            # 检查趋势突破平仓条件
+            elif  df['trend'][i] == 2 and df['trend'][i+1] == -1:
+                df.loc[i,'Position'] = 0
+                df.loc[i,'Commission'] = 6000 *  num_contracts * commission_rate
+                df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i])*20 - df['Commission'][i]
+                df.loc[i,'value'] = open_price - df['close'][i]
+                open_price = 0
+                if i == 0:
+                    send_notification("交易提醒", f"触发空头{symbol}止盈平仓条件,价格：{df['close'][i]}")
+            
+            else:
+                df.loc[i,'Position'] = -1# 继续持有
     return df
+def sendToWechat(message):
+    token = 'd6bea3335df8461d9a64d78a2162878d'#前边复制到那个token
+    title = message
+    content = message
+    template = 'txt'
+    channel = 'wechat'
+    url = f"https://www.pushplus.plus/send?token={token}&title={title}&content={content}&template={template}&channel={channel}"
+    requests.get(url=url)
 
 #系统通知
 def send_notification(title, message):
@@ -279,7 +269,7 @@ def send_notification(title, message):
         MessageBox = ctypes.windll.user32.MessageBoxW
         MessageBox(None, message, title, 0)
    
-    # smsToPhone(message)
+    smsToPhone(message)
     # script = f'display notification "{message}" with title "{title}"'
     # subprocess.run(["osascript", "-e", script])
 def smsToPhone(message):
@@ -304,11 +294,11 @@ def handleData(symbol):
     db_name = 'futures_data.db'
     table_name = '_15_minute_data'
     #判断是否是首次调用
-    if isFirst:
-        df = load_data_from_excel(f"{symbol}_test.xlsx",symbol)
-        isFirst = False
-    else:
-        df = load_data(db_name, table_name,symbol)
+    # if isFirst:
+    #     df = load_data_from_excel(f"{symbol}_test.xlsx",symbol)
+    #     isFirst = False
+    # else:
+    df = load_data(db_name, table_name,symbol)
 
     # 步骤2: 计算指标
     df = add_ema(df)
@@ -317,6 +307,7 @@ def handleData(symbol):
     df = define_signals(df,symbol)
     # print(df)
     df.to_excel(f"{symbol}_test.xlsx")
+    
 
 def start(symbol):
     # 创建数据库表
@@ -329,7 +320,7 @@ def start(symbol):
 
 if __name__ == "__main__":
     
-    product = ['SA2409','FG2405']
+    product = ['SA2409','FG2405']#
     dataThread = threading.Thread(target=fetch_data, args=(product,))
     dataThread.start()
 

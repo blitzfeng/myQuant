@@ -82,17 +82,27 @@
 import requests
 
 
-def send_wechat(msg):
-    token = 'd6bea3335df8461d9a64d78a2162878d'#前边复制到那个token
-    title = 'title1'
-    content = msg
-    template = 'txt'
-    channel = 'sms'
-    url = f"https://www.pushplus.plus/send?token={token}&title={title}&content={content}&template={template}&channel={channel}"
-    print(url)
-    r = requests.get(url=url)
-    print(r.text)
+# def send_wechat(msg):
+#     token = 'd6bea3335df8461d9a64d78a2162878d'#前边复制到那个token
+#     title = 'title1'
+#     content = msg
+#     template = 'txt'
+#     channel = 'sms'
+#     url = f"https://www.pushplus.plus/send?token={token}&title={title}&content={content}&template={template}&channel={channel}"
+#     print(url)
+#     r = requests.get(url=url)
+#     print(r.text)
 
-if __name__ == '__main__':
-    msg = '纯碱2409做多'
-    send_wechat(msg)
+# if __name__ == '__main__':
+#     msg = '纯碱2409做多'
+#     send_wechat(msg)
+import pandas as pd
+
+# 创建一个示例 DataFrame
+data = {'A': [1, 2, 3, 4, 5], 'B': [10, 20, 30, 40, 50]}
+df = pd.DataFrame(data)
+
+# 使用 rolling 沿列方向计算移动平均值
+rolling_mean = df.rolling(window=2).mean()
+print(rolling_mean)
+
