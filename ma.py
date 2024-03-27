@@ -6,6 +6,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import sqlite3
 import subprocess
+import datetime
 
 #系统通知
 def send_notification(title, message):
@@ -25,7 +26,7 @@ def load_data(db_name, table_name,symbols):
     conn = sqlite3.connect(db_name)
 
     # 读取数据,选取数据库中symbol = symbols 的数据并以timestamp排序
-    query = f"SELECT * FROM {table_name} where symbol='{symbols}'  ORDER BY timestamp"
+    query = f"SELECT * FROM {table_name} where symbol='{symbols}' AND datetime>='2024-01-01 09:00:00' AND datetime<='2024-2-29 15:00:00' ORDER BY timestamp"
     df = pd.read_sql_query(query, conn)
 
     # 关闭数据库连接
@@ -46,7 +47,7 @@ def add_ma():
     threshold = daily_df['ma_diff'].rolling(window=12).mean()
     daily_df.loc[daily_df['short_ma'] > daily_df['long_ma'], 'daily_trend'] = 1
     daily_df.loc[daily_df['short_ma'] < daily_df['long_ma'], 'daily_trend'] = -1
-    daily_df.loc[daily_df['ma_diff'] < threshold -2 , 'daily_trend'] = 2
+    daily_df.loc[daily_df['ma_diff'] < threshold + 5 , 'daily_trend'] = 2
     return daily_df
 # 日内买入信号
 def add_ema(df):
@@ -108,43 +109,49 @@ def define_signals(df):
     threshold = df['ma_diff'].rolling(window=12).mean()
     df.loc[df['EMA5'] > df['EMA10'], 'trend'] = 1
     df.loc[df['EMA5'] < df['EMA10'], 'trend'] = -1
-    df.loc[df['ma_diff'] < threshold - 2 , 'trend'] = 2
-    lossValue = 35
+    df.loc[df['ma_diff'] < threshold + 5 , 'trend'] = 2
+    lossValue = 30
     global Trend_Break_Price  # 使用全局变量
     global open_price
     global stop_loss
     df['trend_avg'] = df['trend'].rolling(window=2).mean()
     open_count = 1
+    close_time_arr = ['11:30','15:00','23:00']
     for i in range(1, len(df)):
-        
-        # 检查是否符合开仓条件
-        if df['Position'][i-1] == 0 :  # 如果之前没有持仓
-            # if df['daily_trend'][i] == 1 or df['daily_trend'][i] == 2:# 如果日线趋势为多头或震荡
-                if (df['trend'][i-1] == 2 ) and df['trend'][i] == 1 : # 如果日内买入信号为多头  or df['trend'][i-1] == -1
-                        df.loc[i,'Position'] = 1  # 做多
+        current_time = datetime.datetime.strptime(df['datetime'][i], "%Y-%m-%d %H:%M:%S").time()
+        minute_time = current_time.strftime("%H:%M")
+        # 检查是否符合开仓条件  
+        if df['Position'][i-1] == 0 and minute_time  not in close_time_arr:
+            
+            # print(f"当前时间：{minute_time}")
+            # 检查是否符合开仓条件
+            if df['Position'][i-1] == 0 :  # 如果之前没有持仓
+                # if df['daily_trend'][i] == 1 or df['daily_trend'][i] == 2:# 如果日线趋势为多头或震荡
+                    if (df['trend'][i-1] == 2 or df['trend'][i-1] == -1) and df['trend'][i] == 1 : # 如果日内买入信号为多头  or df['trend'][i-1] == -1
+                            df.loc[i,'Position'] = 1  # 做多
+                            df.loc[i,'Open_Price'] = df['close'][i]
+                            open_price = df['Open_Price'][i]
+                            df.loc[i,'Stop_Loss'] = df['close'][i] - lossValue
+                            stop_loss = df['Stop_Loss'][i]
+                            send_notification("交易提醒", "触发做多开仓条件")
+                            open_count = open_count + 1
+
+                # elif  df['daily_trend'][i] == -1 or df['daily_trend'][i] == 2: # 如果日线趋势为空头或震荡
+                    elif (df['trend'][i-1] == 2 or df['trend'][i-1] == 1)and( df['trend'][i] == -1):#or df['trend'][i-1] == 1
+                        df.loc[i,'Position'] = -1
                         df.loc[i,'Open_Price'] = df['close'][i]
                         open_price = df['Open_Price'][i]
-                        df.loc[i,'Stop_Loss'] = df['close'][i] - lossValue
+                        df.loc[i,'Stop_Loss'] = df['close'][i] + lossValue
                         stop_loss = df['Stop_Loss'][i]
-                        send_notification("交易提醒", "触发做多开仓条件")
+                        send_notification("交易提醒", "触发做空开仓条件")
                         open_count = open_count + 1
-
-            # elif  df['daily_trend'][i] == -1 or df['daily_trend'][i] == 2: # 如果日线趋势为空头或震荡
-                elif (df['trend'][i-1] == 2 )and( df['trend'][i] == -1):#or df['trend'][i-1] == 1
-                    df.loc[i,'Position'] = -1
-                    df.loc[i,'Open_Price'] = df['close'][i]
-                    open_price = df['Open_Price'][i]
-                    df.loc[i,'Stop_Loss'] = df['close'][i] + lossValue
-                    stop_loss = df['Stop_Loss'][i]
-                    send_notification("交易提醒", "触发做空开仓条件")
-                    open_count = open_count + 1
 
         # 持有多头仓位时的止损和止盈逻辑
         if df.loc[i-1,'Position'] == 1:
             # 止损条件
             if df['low'][i] <= stop_loss:
                 df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] =6000 * num_contracts * commission_rate
+                df.loc[i,'Commission'] =100#6000 * num_contracts * commission_rate
                 df.loc[i,'Profit_Loss'] = num_contracts * (stop_loss - open_price) *20 - df['Commission'][i]
                 df.loc[i,'value'] = -lossValue
                 stop_loss = 0
@@ -154,7 +161,7 @@ def define_signals(df):
             
             elif df['trend'][i] == 2 and df['trend'][i-1] == 1:
                 df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
+                df.loc[i,'Commission'] = 100#6000 * num_contracts * commission_rate
                 df.loc[i,'Profit_Loss'] = num_contracts * (df['close'][i] - open_price )*20 - df['Commission'][i]
                 df.loc[i,'value'] = df['close'][i] - open_price
                 send_notification("交易提醒", "触发止盈平仓条件")
@@ -166,7 +173,7 @@ def define_signals(df):
             # 止损条件
             if df['high'][i] >= stop_loss:
                 df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
+                df.loc[i,'Commission'] = 100#6000 * num_contracts * commission_rate
                 df.loc[i,'Profit_Loss'] = num_contracts * ( open_price - stop_loss)*20 - df['Commission'][i]
                 stop_loss = 0
                 df.loc[i,'value'] = -lossValue
@@ -176,7 +183,7 @@ def define_signals(df):
             # 检查趋势突破平仓条件
             elif  df['trend'][i] == 2 and df['trend'][i-1] == -1:
                 df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
+                df.loc[i,'Commission'] = 100#6000 * num_contracts * commission_rate
                 df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i])*20 - df['Commission'][i]
                 df.loc[i,'value'] = open_price - df['close'][i]
                 open_price = 0
@@ -218,6 +225,18 @@ def simulate_trading(df, initial_capital=50000.0, margin_per_contract=8000, tran
 
     return portfolio
 
+def supportLevel(df):
+    high_price = df['high'].max()
+    low_price = df['low'].min()
+    print(f"最高价：{high_price}")
+    print(f"最低价：{low_price}")
+    fibonacci_levels = [0.382, 0.5, 0.618]
+
+    for level in fibonacci_levels:
+        fib_price = low_price + (high_price - low_price) * level
+        print(f"Fibonacci {level*100}% level: {fib_price}")
+
+
 # 主程序
 def main():
     file_name = "futures_data.db"  # Excel文件路径
@@ -225,6 +244,8 @@ def main():
     
     # 加载数据
     df = load_data(file_name, sheet_name,symbol)
+
+    supportLevel(df)
 
     # 
     df = add_ema(df)

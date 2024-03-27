@@ -96,13 +96,16 @@ import requests
 # if __name__ == '__main__':
 #     msg = '纯碱2409做多'
 #     send_wechat(msg)
-import pandas as pd
+# import pandas as pd
 
-# 创建一个示例 DataFrame
-data = {'A': [1, 2, 3, 4, 5], 'B': [10, 20, 30, 40, 50]}
-df = pd.DataFrame(data)
+# # 创建一个示例 DataFrame
+# data = {'A': [1, 2, 3, 4, 5], 'B': [10, 20, 30, 40, 50]}
+# df = pd.DataFrame(data)
 
-# 使用 rolling 沿列方向计算移动平均值
-rolling_mean = df.rolling(window=2).mean()
-print(rolling_mean)
+# # 使用 rolling 沿列方向计算移动平均值
+# rolling_mean = df.rolling(window=2).mean()
+# print(rolling_mean)
+import akshare as ak
+
+print(ak.__doc__)
 

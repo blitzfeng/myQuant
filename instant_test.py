@@ -10,6 +10,7 @@ import ctypes
 
 import requests
 import os
+import concurrent.futures
 
 smsapi = "http://api.smsbao.com/"
 user = "blitzfeng"
@@ -17,6 +18,7 @@ password = "61dedea83a334d0da3e299374aabf748"
 phone = "18606531259"
 
 isFirst = True
+stop_loss_dict = {}
 ####################获取数据####################
 def fetch_and_store_minute_data(symbol, period):
     try:
@@ -90,27 +92,31 @@ def data_correct(symbol, period):
         print("fetch_and_store_minute_data")
 
 
-def fetch_data(symbols):
+def fetch_data(symbol):
     # for symbol in symbols:
-    fetch_periodically(symbols)
+    period = 15
+    fetch_and_store_minute_data(symbol, period)
+    data_correct(symbol, period)
+    #打印当前时间
+    current_time = datetime.now()
+    print(f"{current_time}已抓取{symbol}的{period}分钟数据")
 
 
 def fetch_periodically(symbols):
         period = 15
-        while True:
-            for symbol in symbols :
-                fetch_and_store_minute_data(symbol, period)
-                data_correct(symbol, period)
-                #打印当前时间
-                current_time = datetime.now()
-                print(f"{current_time}已抓取{symbol}的{period}分钟数据")
+        # while True:
+        for symbol in symbols :
+            fetch_and_store_minute_data(symbol, period)
+            data_correct(symbol, period)
+            #打印当前时间
+            current_time = datetime.now()
+            print(f"{current_time}已抓取{symbol}的{period}分钟数据")
             
-            time.sleep(60)  # Sleep for 1 minutes (900 seconds)
+            # time.sleep(60)  # Sleep for 1 minutes (900 seconds)
 
 ######################消费数据######################
             
 open_price = 0 #开仓价格
-stop_loss = 0 #止损价格
 #加载数据
 def load_data(db_name, table_name, symbols):
 
@@ -145,104 +151,105 @@ def add_ema(df):
 
 # 步骤3: 定义交易信号
 def define_signals(df,symbol):
-    num_contracts = 4  # 每次交易的手数（合约数量）
-    commission_rate = 0.002  # 手续费率，例如0.1%
-    df['Position'] = 0  # 交易仓位状态：1表示多头，-1表示空头，0表示无仓位
-    df['Stop_Loss'] = 0  # 止损价格
-    df['Open_Price'] = 0  # 开仓价格
-    df['Profit_Loss'] = 0.0  # 平仓时的利润或亏损
-    df['value'] = 0 #平仓和开仓的价差
-    # 识别趋势
-    df['trend'] = 0
-    threshold = df['ma_diff'].rolling(window=12).mean()
-    # thresholdTemp = df['ma_diff'][::-1].rolling(window=30).mean()
-    # threshold = thresholdTemp.iloc[::-1]
-    df.loc[df['EMA5'] > df['EMA10'], 'trend'] = 1
-    df.loc[df['EMA5'] < df['EMA10'], 'trend'] = -1
-    df.loc[df['ma_diff'] < threshold -2 , 'trend'] = 2
-    lossValue = 35
-    global open_price
-    global stop_loss
+    try:
+        num_contracts = 4  # 每次交易的手数（合约数量）
+        commission_rate = 0.002  # 手续费率，例如0.1%
+        df['Position'] = 0  # 交易仓位状态：1表示多头，-1表示空头，0表示无仓位
+        df['Stop_Loss'] = 0  # 止损价格
+        df['Open_Price'] = 0  # 开仓价格
+        df['Profit_Loss'] = 0.0  # 平仓时的利润或亏损
+        df['value'] = 0 #平仓和开仓的价差
+        # 识别趋势
+        df['trend'] = 0
+        threshold = df['ma_diff'].rolling(window=12).mean()
+        # thresholdTemp = df['ma_diff'][::-1].rolling(window=30).mean()
+        # threshold = thresholdTemp.iloc[::-1]
+        df.loc[df['EMA5'] > df['EMA10'], 'trend'] = 1
+        df.loc[df['EMA5'] < df['EMA10'], 'trend'] = -1
+        df.loc[df['ma_diff'] < threshold -2 , 'trend'] = 2
+        lossValue = 35
+        global open_price
 
-    # latestPosition = 0
-    # i = latestPosition    
-    
-    for i in range(len(df)-2,-1,-1):
-        if i == 0:
-            print(f"time:{datetime.now()} symbol:{symbol},趋势:{df['trend'][i]}")
-            sendToWechat(f"time:{datetime.now()} symbol:{symbol},趋势:{df['trend'][i]}")
-        # print(f"{df.loc[i,'datetime']},i:{i}")
-        # 检查是否符合开仓条件
-        if df['Position'][i+1] == 0 :  # 如果之前没有持仓
-            
-            if (df['trend'][i+1] == 2 or df['trend'][i+1] == -1)and (df['trend'][i] == 1 ):
-                    # print(f"做多{df.loc[i,'datetime']},i:{i}")
-                    df.loc[i,'Position'] = 1  # 做多
-                    df.loc[i,'Open_Price'] = df['close'][i]
-                    open_price = df['Open_Price'][i]
-                    df.loc[i,'Stop_Loss'] = df['close'][i] - lossValue
-                    stop_loss = df['Stop_Loss'][i]
-                    if i == 0:
-                        print("做多开仓")
-                        send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
+        # latestPosition = 0
+        # i = latestPosition    
+        
+        for i in range(len(df)-2,-1,-1):
+            if i == 0:
+                print(f"time:{datetime.now()} symbol:{symbol},趋势:{df['trend'][i]}")
+                sendToWechat(f"time:{datetime.now()} symbol:{symbol},趋势:{df['trend'][i]}")
+            # print(f"{df.loc[i,'datetime']},i:{i}")
+            # 检查是否符合开仓条件
+            if df['Position'][i+1] == 0 :  # 如果之前没有持仓
+                if (df['trend'][i+1] == 2 or df['trend'][i+1] == -1)and (df['trend'][i] == 1 ):
+                        # print(f"做多{df.loc[i,'datetime']},i:{i}")
+                        df.loc[i,'Position'] = 1  # 做多
+                        df.loc[i,'Open_Price'] = df['close'][i]
+                        open_price = df['Open_Price'][i]
+                        df.loc[i,'Stop_Loss'] = df['close'][i] - lossValue
+                        stop_loss_dict[symbol] = df['Stop_Loss'][i]
+                        if i == 0:
+                            print("做多开仓")
+                            send_notification("交易提醒", f"触发{symbol}做多开仓条件,价格：{df['close'][i]}")
 
-            elif (df['trend'][i+1] == 2 or df['trend'][i+1] == 1)and( df['trend'][i] == -1):
-                    
-                    df.loc[i,'Position'] = -1
-                    df.loc[i,'Open_Price'] = df['close'][i]
-                    open_price = df['Open_Price'][i]
-                    df.loc[i,'Stop_Loss'] = df['close'][i] + lossValue
-                    stop_loss = df['Stop_Loss'][i]
-                    if i == 0:
-                        print("做空开仓")
-                        send_notification("交易提醒", f"触发{symbol}做空开仓条件,价格：{df['close'][i]}")
-        # 持有多头仓位时的止损和止盈逻辑
-        if df['Position'][i+1] == 1:
-            # 止损条件
-            if df['low'][i] <= stop_loss:
-                df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
-                df.loc[i,'Profit_Loss'] = num_contracts * (stop_loss - open_price)*20 - df['Commission'][i]
-                df.loc[i,'value'] = -lossValue
-                if i == 0:
-                    send_notification("交易提醒", f"触发多头{symbol}止损平仓条件,价格：{stop_loss}")
-                stop_loss = 0
-
-        # 止盈条件
-            elif df['trend'][i] == 2 and df['trend'][i+1] == 1:
+                elif (df['trend'][i+1] == 2 or df['trend'][i+1] == 1)and( df['trend'][i] == -1):
+                        
+                        df.loc[i,'Position'] = -1
+                        df.loc[i,'Open_Price'] = df['close'][i]
+                        open_price = df['Open_Price'][i]
+                        df.loc[i,'Stop_Loss'] = df['close'][i] + lossValue
+                        stop_loss_dict[symbol] = df['Stop_Loss'][i]
+                        if i == 0:
+                            print("做空开仓")
+                            send_notification("交易提醒", f"触发{symbol}做空开仓条件,价格：{df['close'][i]}")
+            # 持有多头仓位时的止损和止盈逻辑
+            if df['Position'][i+1] == 1:
+                # 止损条件
+                if df['low'][i] <= stop_loss_dict[symbol]:
                     df.loc[i,'Position'] = 0
                     df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
-                    df.loc[i,'Profit_Loss'] = num_contracts * (df['close'][i] - open_price )*20 - df['Commission'][i]
-                    df.loc[i,'value'] = df['close'][i] - open_price
+                    df.loc[i,'Profit_Loss'] = num_contracts * (stop_loss_dict[symbol] - open_price)*20 - df['Commission'][i]
+                    df.loc[i,'value'] = -lossValue
                     if i == 0:
-                        send_notification("交易提醒", f"触发多头{symbol}止盈平仓条件,价格：{df['close'][i]}")
-                    open_price = 0
-        
-            else:
-                df.loc[i,'Position'] = 1  # 继续持有
-        elif df['Position'][i+1] == -1:
-            # 止损条件
-            if df['high'][i] >= stop_loss:
-                df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = 6000 *  num_contracts * commission_rate
-                df.loc[i,'Profit_Loss'] = num_contracts * ( open_price - stop_loss)*20 - df['Commission'][i]
-                df.loc[i,'value'] = -lossValue
-                if i == 0:
-                    send_notification("交易提醒", f"触发空头{symbol}止损平仓条件,价格：{stop_loss}")
-                stop_loss = 0
+                        send_notification("交易提醒", f"触发多头{symbol}止损平仓条件,价格：{stop_loss_dict[symbol]}")
+                    stop_loss_dict[symbol] = 0
+
             # 止盈条件
-            # 检查趋势突破平仓条件
-            elif  df['trend'][i] == 2 and df['trend'][i+1] == -1:
-                df.loc[i,'Position'] = 0
-                df.loc[i,'Commission'] = 6000 *  num_contracts * commission_rate
-                df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i])*20 - df['Commission'][i]
-                df.loc[i,'value'] = open_price - df['close'][i]
-                open_price = 0
-                if i == 0:
-                    send_notification("交易提醒", f"触发空头{symbol}止盈平仓条件,价格：{df['close'][i]}")
+                elif df['trend'][i] == 2 and df['trend'][i+1] == 1:
+                        df.loc[i,'Position'] = 0
+                        df.loc[i,'Commission'] = 6000 * num_contracts * commission_rate
+                        df.loc[i,'Profit_Loss'] = num_contracts * (df['close'][i] - open_price )*20 - df['Commission'][i]
+                        df.loc[i,'value'] = df['close'][i] - open_price
+                        if i == 0:
+                            send_notification("交易提醒", f"触发多头{symbol}止盈平仓条件,价格：{df['close'][i]}")
+                        open_price = 0
             
-            else:
-                df.loc[i,'Position'] = -1# 继续持有
+                else:
+                    df.loc[i,'Position'] = 1  # 继续持有
+            elif df['Position'][i+1] == -1:
+                # 止损条件
+                if df['high'][i] >= stop_loss_dict[symbol]:
+                    df.loc[i,'Position'] = 0
+                    df.loc[i,'Commission'] = 6000 *  num_contracts * commission_rate
+                    df.loc[i,'Profit_Loss'] = num_contracts * ( open_price - stop_loss_dict[symbol])*20 - df['Commission'][i]
+                    df.loc[i,'value'] = -lossValue
+                    if i == 0:
+                        send_notification("交易提醒", f"触发空头{symbol}止损平仓条件,价格：{stop_loss_dict[symbol]}")
+                    stop_loss_dict[symbol] = 0
+                # 止盈条件
+                # 检查趋势突破平仓条件
+                elif  df['trend'][i] == 2 and df['trend'][i+1] == -1:
+                    df.loc[i,'Position'] = 0
+                    df.loc[i,'Commission'] = 6000 *  num_contracts * commission_rate
+                    df.loc[i,'Profit_Loss'] = num_contracts * (open_price - df['close'][i])*20 - df['Commission'][i]
+                    df.loc[i,'value'] = open_price - df['close'][i]
+                    open_price = 0
+                    if i == 0:
+                        send_notification("交易提醒", f"触发空头{symbol}止盈平仓条件,价格：{df['close'][i]}")
+                
+                else:
+                    df.loc[i,'Position'] = -1# 继续持有
+    except Exception as e:
+        print(f"define_signals error")
     return df
 def sendToWechat(message):
     token = 'd6bea3335df8461d9a64d78a2162878d'#前边复制到那个token
@@ -259,11 +266,13 @@ def send_notification(title, message):
 
     if os_name == 'Darwin':  # macOS
          #交互式通知
-        script = f'''
-        tell application "System Events"
-            display dialog "{message}" with title "{title}" buttons ["OK"] default button "OK"
-        end tell
-        '''
+        # script = f'''
+        # tell application "System Events"
+        #     display dialog "{message}" with title "{title}" buttons ["OK"] default button "OK"
+        # end tell
+        # '''
+        # subprocess.run(["osascript", "-e", script])
+        script = f'display notification "{message}" with title "{title}"'
         subprocess.run(["osascript", "-e", script])
     elif os_name == 'Windows':  # Windows
         MessageBox = ctypes.windll.user32.MessageBoxW
@@ -283,12 +292,21 @@ def smsToPhone(message):
     r = requests.get(url=url)
     print(r.text)
 def startHandleData(symbols):
-    while True:
-        for symbol in symbols:
+    # while True:
+        if is_specific_minute():
+           #打印当前时间
+            # current_time = datetime.now()
+            # print(f"{current_time}开始处理数据")
+           for symbol in symbols:
             handleData(symbol)
-        time.sleep(900)
+            
+        # else:
+        #     # 等待下一次调用
+        #     time.sleep(60)  # 等待60秒，即1分钟
 
 def handleData(symbol):
+    if not is_specific_minute():
+        return
     global isFirst
     # 步骤1: 加载数据
     db_name = 'futures_data.db'
@@ -300,6 +318,8 @@ def handleData(symbol):
     # else:
     df = load_data(db_name, table_name,symbol)
 
+    supportLevel(df,symbol)
+
     # 步骤2: 计算指标
     df = add_ema(df)
 
@@ -307,25 +327,83 @@ def handleData(symbol):
     df = define_signals(df,symbol)
     # print(df)
     df.to_excel(f"{symbol}_test.xlsx")
+
+def supportLevel(df,symbol):
+    high_price = df['high'].max()
+    low_price = df['low'].min()
+    print(f"symbol:{symbol}  最高价：{high_price}")
+    print(f"symbol:{symbol}  最低价：{low_price}")
+    fibonacci_levels = [0.092,0.236,0.382, 0.5, 0.618,0.764,0.908]
+
+    for level in fibonacci_levels:
+        fib_price = low_price + (high_price - low_price) * level
+        print(f"Fibonacci {level*100}% level: {fib_price}")
     
+def is_specific_minute():
+    current_minute = datetime.now().minute
+    return current_minute in [14, 29, 44, 59]
+def is_market_open():
+    temp_current_time = datetime.now().strftime('%H:%M')
+    current_time = datetime.strptime(temp_current_time, '%H:%M')
+    market_open_1 = datetime.strptime('08:59', '%H:%M')
+    market_close_1 = datetime.strptime('11:30', '%H:%M')
+    market_open_2 = datetime.strptime('13:29', '%H:%M')
+    market_close_2 = datetime.strptime('15:00', '%H:%M')
+    market_open_3 = datetime.strptime('20:59', '%H:%M')
+    market_close_3 = datetime.strptime('23:00', '%H:%M')
 
-def start(symbol):
-    # 创建数据库表
-    # for period in [1, 5, 15, 30, 60]:
-    #     create_minute_table_if_not_exists(f'sa2405_{period}_minute_data', ['datetime', 'open', 'high', 'low', 'close', 'volume', 'hold'])
+    if (market_open_1 <= current_time <= market_close_1) or (market_open_2 <= current_time <= market_close_2) or (market_open_3 <= current_time <= market_close_3):
+        return True
+    else:
+        return False
 
-    # 开启一个线程
-    thread = threading.Thread(target=fetch_periodically, args=(symbol,))
-    thread.start()   
+def is_market_close():
+    current_time = datetime.now().time()
+    return  current_time.hour >= 15 and current_time.hour < 20
+
+def is_today_market_break():
+    temp_current_time = datetime.now().strftime('%H:%M')
+    current_time = datetime.strptime(temp_current_time, '%H:%M')
+    market_break = datetime.strptime('11:30', '%H:%M')
+    market_break1 = datetime.strptime('13:20', '%H:%M')
+    market_break2 = datetime.strptime('23:00', '%H:%M')
+    market_break3 = datetime.strptime('00:00', '%H:%M')
+    market_break4 = datetime.strptime('08:40', '%H:%M')
+    if market_break <= current_time <= market_break1 or market_break2 <= current_time <= market_break3 or market_break3 <= current_time <= market_break4:
+        return True
+    else:
+        return False
+
+market_prepare = False
 
 if __name__ == "__main__":
-    
-    product = ['SA2409','FG2405']#
-    dataThread = threading.Thread(target=fetch_data, args=(product,))
-    dataThread.start()
+    product = ['SA2409', 'FG2405']
+    while True:
+        if is_market_open():
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                [executor.submit(fetch_data, p) for p in product]
+            with concurrent.futures.ThreadPoolExecutor() as executor:
+                [executor.submit(handleData, p) for p in product]
+            market_prepare = False
+            time.sleep(60)
+        elif is_market_close() and not market_prepare:
+            #调用另一个python脚本 fetch_data.py
+            os.system('python fetch_data.py')
+            print("休盘中...")
+            time.sleep(60 * 60)
+        elif datetime.now().time().hour == 20 or datetime.now().time().hour == 8:
+            print("准备开盘")
+            market_prepare = True 
+            time.sleep(60)
+        elif is_today_market_break():
+            print("中场休息")
+            time.sleep(60 * 30)
+        else :
+            time.sleep(60)
 
-    handleDataThread = threading.Thread(target=startHandleData, args=(product,))
-    handleDataThread.start()
-    # for i in product:
-    #     start(i)
-    #  smsToPhone("测试短信")
+    # dataThread = threading.Thread(target=fetch_data_periodically, args=(product,))
+    # dataThread.start()
+
+    # handleDataThread = threading.Thread(target=start_handle_data_periodically, args=(product,))
+    # handleDataThread.start()
+   

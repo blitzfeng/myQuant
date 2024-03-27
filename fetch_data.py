@@ -96,12 +96,21 @@ def fetch_and_store_daily_data(symbol):
         for _, row in daily_data.iterrows():
             timestamp = int(datetime.strptime(row['date'], '%Y-%m-%d').timestamp())
             flag = symbol + str(timestamp)
+            existing_data = cursor.fetchone()
             values = [timestamp, flag,row['date'],symbol, row['open'], row['high'], row['low'], row['close'], row['volume'], row['hold']]
-            insert_sql = f'''
-                INSERT OR IGNORE INTO {table_name} (timestamp,flag,{', '.join(columns)})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
-            '''
-            cursor.execute(insert_sql, values)
+            if existing_data:
+                update_sql = f'''
+                    UPDATE {table_name}
+                    SET open = ?, high = ?, low = ?, close = ?, volume = ?, hold = ?
+                    WHERE flag = ? AND timestamp = ?
+                '''
+                cursor.execute(update_sql, values[4:] + [flag] + [timestamp])
+            else:
+                insert_sql = f'''
+                    INSERT OR IGNORE INTO {table_name} (timestamp,flag,{', '.join(columns)})
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,?)
+                '''
+                cursor.execute(insert_sql, values)
         print(f"Daily data for {symbol} fetched and stored at {datetime.now()},data length:{len(daily_data)}")
         # 提交并关闭连接
         conn.commit()
@@ -145,7 +154,7 @@ def fetch_and_store_all_periods(symbol):
 
 
 if __name__ == "__main__":
-    product = ['SA2405','SA2409','FG2405','JM2405']
+    product = ['SA2405','SA2409','FG2405','JM2405','M2405','RM2409','OI2405','OI2409']
     for p in product:
         fetch_and_store_daily_data(p)
         fetch_and_store_all_periods(p)
